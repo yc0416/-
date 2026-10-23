@@ -1,0 +1,60 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Gallery: Install",
+      "type": "shell",
+      "command": "npm ci",
+      "options": { "cwd": "${workspaceFolder}" },
+      "problemMatcher": []
+    },
+    {
+      "label": "Gallery: API",
+      "type": "shell",
+      "command": "npm run server",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "gallery-api",
+        "pattern": { "regexp": "^(__no_diagnostics__):(\\d+):(.*)$", "file": 1, "line": 2, "message": 3 },
+        "background": { "activeOnStart": true, "beginsPattern": ".*", "endsPattern": "Gallery server listening on port 8000" }
+      },
+      "presentation": { "panel": "dedicated", "reveal": "always", "group": "gallery" }
+    },
+    {
+      "label": "Gallery: Web",
+      "type": "shell",
+      "command": "npm run dev",
+      "options": { "cwd": "${workspaceFolder}" },
+      "isBackground": true,
+      "problemMatcher": {
+        "owner": "gallery-web",
+        "pattern": { "regexp": "^(__no_diagnostics__):(\\d+):(.*)$", "file": 1, "line": 2, "message": 3 },
+        "background": { "activeOnStart": true, "beginsPattern": ".*", "endsPattern": ".*Local:.*5173.*" }
+      },
+      "presentation": { "panel": "dedicated", "reveal": "always", "group": "gallery" }
+    },
+    {
+      "label": "Gallery: Start",
+      "dependsOn": ["Gallery: API", "Gallery: Web"],
+      "dependsOrder": "parallel",
+      "problemMatcher": []
+    },
+    {
+      "label": "Gallery: Build",
+      "type": "shell",
+      "command": "npm run build",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "Gallery: Test",
+      "type": "shell",
+      "command": "npm test",
+      "options": { "cwd": "${workspaceFolder}" },
+      "group": "test",
+      "problemMatcher": []
+    }
+  ]
+}

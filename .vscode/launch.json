@@ -1,0 +1,30 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Gallery: Web + API (Chrome)",
+      "type": "pwa-chrome",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}",
+      "preLaunchTask": "Gallery: Start"
+    },
+    {
+      "name": "Gallery: Web + API (Edge)",
+      "type": "pwa-msedge",
+      "request": "launch",
+      "url": "http://localhost:5173",
+      "webRoot": "${workspaceFolder}",
+      "preLaunchTask": "Gallery: Start"
+    },
+    {
+      "name": "Gallery: Debug Python API",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/server/app.py",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true
+    }
+  ]
+}
