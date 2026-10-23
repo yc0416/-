@@ -1,5 +1,7 @@
 """Server-only PostgreSQL + private Supabase Storage integration."""
 import json
+from contextlib import contextmanager
+import tempfile
 import logging
 import os
 import ssl
@@ -34,6 +36,12 @@ def database_error_message(error):
     state = getattr(error, 'sqlstate', None)
     if state in ('28P01', '28000') or any(x in detail for x in ('password authentication failed', 'wrong password', 'tenant or user not found')):
         return '[DB_AUTH] Check the database password and Session pooler username (postgres.PROJECT_REF).'
+    if any(x in detail for x in ('does not match host', 'hostname mismatch', 'host name mismatch')):
+        return '[DB_TLS_HOSTNAME] Certificate does not match the database hostname. Recopy the Session pooler URI from the same Supabase project.'
+    if 'certificate has expired' in detail or 'certificate expired' in detail:
+        return '[DB_TLS_EXPIRED] The database certificate has expired. Check Supabase status and the downloaded CA certificate.'
+    if any(x in detail for x in ('unable to get local issuer', 'unable to verify the first certificate', 'self-signed certificate', 'self signed certificate')):
+        return '[DB_TLS_ISSUER] Database certificate issuer is not trusted. Confirm the CA was downloaded from this Supabase project.'
     if any(x in detail for x in ('certificate', 'sslrootcert', 'tls', 'ssl error')):
         return '[DB_TLS] Database certificate verification failed. Configure the trusted Supabase CA file with GALLERY_DB_CA_FILE; keep TLS verification enabled.'
     if any(x in detail for x in ('resolve', 'name resolution', 'network is unreachable', 'timeout', 'timed out', 'connection refused')):
@@ -43,6 +51,30 @@ def database_error_message(error):
     if any(x in detail for x in ('invalid', 'parse', 'missing', 'uri', 'percent')):
         return '[DB_URI] DATABASE_URL is not a valid PostgreSQL URI. Check password URL encoding and remove surrounding quotes.'
     return '[DB_CONNECT] Database connection failed. Check Session pooler URI, password and Supabase project status.'
+
+@contextmanager
+def database_trust():
+    path = os.environ.get('GALLERY_DB_CA_FILE', 'system')
+    if path == 'system':
+        yield path
+        return
+    # A Supabase CA supplements system trust instead of replacing it. Session
+    # pooler and direct connections can have different certificate issuers.
+    context = ssl.create_default_context()
+    try:
+        context.load_verify_locations(cafile=path)
+    except FileNotFoundError:
+        raise SetupError('[DB_CA_MISSING] CA file was not found. Check Render Secret Files and GALLERY_DB_CA_FILE.') from None
+    except PermissionError:
+        raise SetupError('[DB_CA_UNREADABLE] App user cannot read the CA file in Render Secret Files.') from None
+    except (ssl.SSLError, OSError):
+        raise SetupError('[DB_CA_FORMAT] CA file is not a readable PEM certificate. Paste all BEGIN CERTIFICATE through END CERTIFICATE lines.') from None
+    with tempfile.TemporaryDirectory(prefix='gallery-ca-') as folder:
+        bundle_path = os.path.join(folder, 'trusted.pem')
+        with open(bundle_path, 'w', encoding='ascii') as bundle:
+            for certificate in context.get_ca_certs(binary_form=True):
+                bundle.write(ssl.DER_cert_to_PEM_cert(certificate))
+        yield bundle_path
 
 def connect_database(**extra):
     import psycopg
@@ -62,9 +94,11 @@ def connect_database(**extra):
     elif any(marker in url.upper() for marker in markers):
         raise SetupError('[DB_PASSWORD_UNSET] Set DATABASE_PASSWORD to the raw database password. Keep the copied Session pooler URI in DATABASE_URL.')
     try:
-        return psycopg.connect(url, sslmode='verify-full',
-            sslrootcert=os.environ.get('GALLERY_DB_CA_FILE', 'system'),
-            connect_timeout=10, prepare_threshold=None, **extra)
+        with database_trust() as ca_file:
+            return psycopg.connect(url, sslmode='verify-full', sslrootcert=ca_file,
+                connect_timeout=10, prepare_threshold=None, **extra)
+    except SetupError:
+        raise
     except Exception as error:
         raise SetupError(database_error_message(error)) from None
 
