@@ -134,7 +134,7 @@ class Handler(BaseHTTPRequestHandler):
         except sqlite3.IntegrityError:
             self.reply(409, {'error': '이미 사용 중인 아이디입니다.'})
         except Exception as error:
-            if cloud.ENABLED and getattr(error, 'sqlstate', None) == '23505':
+            if cloud.ENABLED and cloud.sqlstate(error) == '23505':
                 return self.reply(409, {'error': '이미 사용 중인 아이디입니다.'})
             self.reply(500, {'error': '서버 오류가 발생했습니다. 잠시 후 다시 시도하세요.'})
 

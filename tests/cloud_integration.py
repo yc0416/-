@@ -89,6 +89,7 @@ with tempfile.TemporaryDirectory(prefix='gallery-cloud-') as folder:
         with connect() as db:
             db.execute('CREATE ROLE anon')
             db.execute('CREATE ROLE authenticated')
+        subprocess.run([sys.executable,'-c','from server import cloud; cloud.initialize()'],cwd=ROOT,env=env,check=True)
         result=subprocess.run([sys.executable,'-m','unittest','discover','-s','tests','-v'],cwd=ROOT,env=env)
         if result.returncode: raise RuntimeError('Cloud API integration failed')
         with connect() as db:

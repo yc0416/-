@@ -15,11 +15,13 @@ class CloudDiagnosticsTests(unittest.TestCase):
     def test_separate_password_avoids_uri_encoding(self):
         url='postgresql://postgres.example:[YOUR-PASSWORD]@localhost:5432/postgres'
         password='Dummy:@#%/[]? password'
-        with patch.object(cloud,'DATABASE_URL',url), patch.dict('os.environ',{'DATABASE_PASSWORD':password}), patch('psycopg.connect') as connect:
+        with patch.object(cloud,'DATABASE_URL',url), patch.dict('os.environ',{'DATABASE_PASSWORD':password}), patch('pg8000.dbapi.connect') as connect:
             cloud.connect_database()
-            self.assertEqual(connect.call_args.args[0],url.replace('[YOUR-PASSWORD]',''))
+            self.assertEqual(connect.call_args.kwargs['host'],'localhost')
             self.assertEqual(connect.call_args.kwargs['password'],password)
-            self.assertEqual(connect.call_args.kwargs['sslmode'],'verify-full')
+            import ssl
+            self.assertTrue(connect.call_args.kwargs['ssl_context'].check_hostname)
+            self.assertEqual(connect.call_args.kwargs['ssl_context'].verify_mode,ssl.CERT_REQUIRED)
 
     def test_ca_file_errors_are_distinct(self):
         import tempfile
@@ -44,7 +46,7 @@ class CloudDiagnosticsTests(unittest.TestCase):
         self.assertNotIn('PRIVATE',message)
 
     def test_driver_tls_failure_runs_credential_free_probe(self):
-        with patch.object(cloud,'DATABASE_URL','postgresql://user:PRIVATE_PASSWORD@localhost/postgres'), patch('psycopg.connect',side_effect=Exception('SSL error: certificate verify failed PRIVATE_PASSWORD')), patch.object(cloud,'probe_database_tls',return_value='[DB_TLS_ISSUER] Safe diagnosis') as probe:
+        with patch.object(cloud,'DATABASE_URL','postgresql://user:PRIVATE_PASSWORD@localhost/postgres'), patch('pg8000.dbapi.connect',side_effect=Exception('SSL error: certificate verify failed PRIVATE_PASSWORD')), patch.object(cloud,'probe_database_tls',return_value='[DB_TLS_ISSUER] Safe diagnosis') as probe:
             with self.assertRaisesRegex(cloud.SetupError,'DB_TLS_ISSUER'):
                 cloud.connect_database()
             probe.assert_called_once()

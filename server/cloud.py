@@ -31,11 +31,18 @@ class StorageError(Exception):
         super().__init__(message)
         self.status = status
 
+def sqlstate(error):
+    if getattr(error, 'sqlstate', None):
+        return error.sqlstate
+    if error.args and isinstance(error.args[0], dict):
+        return error.args[0].get('C')
+    return None
+
 def database_error_message(error):
     # Inspect driver details locally but never return them: URI/passwords can
     # appear in parsing errors. Only emit one of these fixed diagnostic strings.
     detail = str(error).lower()
-    state = getattr(error, 'sqlstate', None)
+    state = sqlstate(error)
     if state in ('28P01', '28000') or any(x in detail for x in ('password authentication failed', 'wrong password', 'tenant or user not found')):
         return '[DB_AUTH] Check the database password and Session pooler username (postgres.PROJECT_REF).'
     if any(x in detail for x in ('does not match host', 'hostname mismatch', 'host name mismatch')):
@@ -113,7 +120,8 @@ def probe_database_tls(url, ca_file):
         return '[DB_TLS_PROBE_NETWORK] TLS probe could not reach the database. Check Supabase status and the Session pooler endpoint.'
 
 def connect_database(**extra):
-    import psycopg
+    import pg8000.dbapi
+    from psycopg.conninfo import conninfo_to_dict
     url = DATABASE_URL
     password = os.environ.get('DATABASE_PASSWORD')
     if len(url) >= 2 and url[0] == url[-1] and url[0] in ('"', "'"):
@@ -132,8 +140,14 @@ def connect_database(**extra):
     try:
         with database_trust() as ca_file:
             try:
-                return psycopg.connect(url, sslmode='verify-full', sslrootcert=ca_file,
-                    connect_timeout=10, prepare_threshold=None, **extra)
+                settings = conninfo_to_dict(url)
+                context = ssl.create_default_context(cafile=None if ca_file == 'system' else ca_file)
+                # pg8000 uses Python's verified SSLContext, the same TLS stack
+                # used by the successful PostgreSQL certificate probe.
+                return DatabaseClient(pg8000.dbapi.connect(
+                    user=settings.get('user'), password=extra.get('password', settings.get('password')),
+                    host=settings.get('host', 'localhost'), port=int(settings.get('port', '5432')),
+                    database=settings.get('dbname', 'postgres'), ssl_context=context, timeout=10))
             except Exception as error:
                 message = database_error_message(error)
                 if message.startswith('[DB_TLS]'):
@@ -184,9 +198,42 @@ class Row(dict):
     def __getitem__(self, key):
         return tuple(self.values())[key] if isinstance(key, int) else super().__getitem__(key)
 
-def row_factory(cursor):
-    names = [column.name for column in cursor.description] if cursor.description else []
-    return lambda values: Row(zip(names, values))
+class DatabaseResult:
+    def __init__(self, cursor):
+        self.cursor = cursor
+        self.names = [column[0] for column in cursor.description] if cursor.description else []
+    def fetchone(self):
+        values = self.cursor.fetchone()
+        return Row(zip(self.names, values)) if values is not None else None
+    def fetchall(self):
+        return [Row(zip(self.names, values)) for values in self.cursor.fetchall()]
+    def __iter__(self):
+        while (row := self.fetchone()) is not None:
+            yield row
+
+class DatabaseClient:
+    def __init__(self, connection): self.connection = connection
+    def execute(self, sql, params=()):
+        cursor = self.connection.cursor()
+        cursor.execute(sql, params)
+        return DatabaseResult(cursor)
+    def commit(self): self.connection.commit()
+    def rollback(self): self.connection.rollback()
+    def close(self): self.connection.close()
+    @contextmanager
+    def transaction(self):
+        try:
+            yield
+            self.commit()
+        except Exception:
+            self.rollback()
+            raise
+    def __enter__(self): return self
+    def __exit__(self, kind, value, traceback):
+        try:
+            self.commit() if kind is None else self.rollback()
+        finally:
+            self.close()
 
 class Cursor:
     def __init__(self, raw, lastrowid=None):
@@ -197,7 +244,7 @@ class Cursor:
 
 class Connection:
     def __init__(self):
-        self.raw = connect_database(row_factory=row_factory)
+        self.raw = connect_database()
         self.raw.execute('SET search_path TO gallery, public')
         self.raw.execute("SET statement_timeout TO '15s'")
         self.uploaded = []
@@ -276,7 +323,9 @@ def initialize():
     with connect_database() as db:
         # Serialize schema initialization if multiple worker starts overlap.
         db.execute('SELECT pg_advisory_xact_lock(7041601)')
-        db.execute(SCHEMA, prepare=False)
+        for statement in SCHEMA.split(';'):
+            if statement.strip():
+                db.execute(statement)
         for name in ('users','sessions','posts','comments','votes','attempts','images','storage_cleanup'):
             db.execute(f'ALTER TABLE gallery.{name} ENABLE ROW LEVEL SECURITY')
             db.execute(f'REVOKE ALL ON gallery.{name} FROM PUBLIC')

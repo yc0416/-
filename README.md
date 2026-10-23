@@ -161,3 +161,5 @@ npm run build
 Supabase 변수를 설정하지 않은 PC에서는 기존 SQLite로 실행합니다. `npm test`는 실제 클라우드 변수와 분리된 임시 SQLite를 사용해야 하며 운영 계정을 대상으로 테스트하지 마세요. 선택적 클라우드 통합 검증은 `node scripts/python.mjs tests/cloud_integration.py`입니다. Docker와 OpenSSL이 필요하며, 임시 TLS PostgreSQL 및 인증을 확인하는 HTTPS Storage 모의 서버에 대해 동일 API 테스트와 권한·삭제를 확인합니다. 사용자 Supabase 프로젝트에는 접속하지 않습니다.
 
 클라우드 연결 코드를 저장한 것과 실제 Supabase 계정에 연결하여 검증한 것은 다릅니다. 연결 정보는 사용자가 Render에 직접 등록해야 합니다.
+
+PostgreSQL 접속은 Python의 검증된 SSLContext를 사용하는 pg8000 드라이버로 처리합니다. `psycopg`는 연결 URI 파싱과 별도 통합 테스트의 기준 연결에만 사용합니다. URI의 SSL 옵션이 있더라도 인증서·호스트 이름 검증을 끄지 않습니다.
