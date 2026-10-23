@@ -34,6 +34,21 @@ class CloudDiagnosticsTests(unittest.TestCase):
                 with self.assertRaisesRegex(cloud.SetupError,'DB_CA_FORMAT'):
                     with cloud.database_trust(): pass
 
+    def test_tls_probe_reports_verify_code_without_secret(self):
+        import ssl
+        error=ssl.SSLCertVerificationError('PRIVATE_DRIVER_TEXT')
+        error.verify_code=20
+        with patch.object(cloud.socket,'create_connection',side_effect=error):
+            message=cloud.probe_database_tls('postgresql://user:PRIVATE_PASSWORD@localhost/postgres','system')
+        self.assertIn('[DB_TLS_ISSUER]',message)
+        self.assertNotIn('PRIVATE',message)
+
+    def test_driver_tls_failure_runs_credential_free_probe(self):
+        with patch.object(cloud,'DATABASE_URL','postgresql://user:PRIVATE_PASSWORD@localhost/postgres'), patch('psycopg.connect',side_effect=Exception('SSL error: certificate verify failed PRIVATE_PASSWORD')), patch.object(cloud,'probe_database_tls',return_value='[DB_TLS_ISSUER] Safe diagnosis') as probe:
+            with self.assertRaisesRegex(cloud.SetupError,'DB_TLS_ISSUER'):
+                cloud.connect_database()
+            probe.assert_called_once()
+
     def test_storage_failures_are_distinct_and_safe(self):
         for status, code in [(401,'STORAGE_KEY'),(403,'STORAGE_KEY'),(404,'STORAGE_BUCKET'),(503,'STORAGE_NETWORK')]:
             with self.subTest(status=status), patch.object(cloud,'storage_request',side_effect=cloud.StorageError('PRIVATE_UPSTREAM_BODY',status)):

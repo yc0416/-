@@ -5,6 +5,8 @@ import tempfile
 import logging
 import os
 import ssl
+import socket
+import struct
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
@@ -76,6 +78,40 @@ def database_trust():
                 bundle.write(ssl.DER_cert_to_PEM_cert(certificate))
         yield bundle_path
 
+def probe_database_tls(url, ca_file):
+    """Unauthenticated PostgreSQL SSLRequest; emit fixed codes, never credentials."""
+    from psycopg.conninfo import conninfo_to_dict
+    try:
+        settings = conninfo_to_dict(url)
+        host = settings.get('host', '').split(',')[0]
+        port = int(settings.get('port', '5432').split(',')[0])
+        if not host or host.startswith('/'):
+            return '[DB_TLS] Database TLS connection failed; verify the configured endpoint.'
+        context = ssl.create_default_context(cafile=None if ca_file == 'system' else ca_file)
+        with socket.create_connection((host, port), timeout=6) as connection:
+            # SSL negotiation contains no username, password or database name.
+            connection.sendall(struct.pack('!II', 8, 80877103))
+            if connection.recv(1) != b'S':
+                return '[DB_TLS_ENDPOINT] Endpoint did not accept PostgreSQL TLS. Check Session pooler host and port 5432.'
+            with context.wrap_socket(connection, server_hostname=host):
+                return '[DB_TLS_DRIVER] Certificate checks pass in the TLS probe, but the PostgreSQL driver failed. Check connection URI SSL options.'
+    except ssl.SSLCertVerificationError as error:
+        codes = {
+            9: '[DB_TLS_NOT_YET_VALID] Database certificate is not yet valid. Check Supabase certificate status.',
+            10: '[DB_TLS_EXPIRED] Database certificate has expired. Check Supabase certificate status.',
+            18: '[DB_TLS_ISSUER] Database certificate issuer is not trusted. Download the CA from the same Supabase project.',
+            19: '[DB_TLS_ISSUER] Database certificate issuer is not trusted. Download the CA from the same Supabase project.',
+            20: '[DB_TLS_ISSUER] Certificate chain is incomplete or its issuer is not trusted. Download the CA from the same Supabase project.',
+            21: '[DB_TLS_ISSUER] Certificate chain is incomplete or its issuer is not trusted. Download the CA from the same Supabase project.',
+            62: '[DB_TLS_HOSTNAME] Certificate does not match the database hostname. Recopy the Session pooler URI.',
+            64: '[DB_TLS_HOSTNAME] Certificate does not match the database IP address. Use the Session pooler hostname, not an IP address.'
+        }
+        return codes.get(error.verify_code, '[DB_TLS_VERIFY] Database certificate validation failed with a different certificate constraint.')
+    except ssl.SSLError:
+        return '[DB_TLS_HANDSHAKE] TLS negotiation failed before authentication. Check the PostgreSQL Session pooler endpoint.'
+    except (OSError, ValueError):
+        return '[DB_TLS_PROBE_NETWORK] TLS probe could not reach the database. Check Supabase status and the Session pooler endpoint.'
+
 def connect_database(**extra):
     import psycopg
     url = DATABASE_URL
@@ -95,8 +131,14 @@ def connect_database(**extra):
         raise SetupError('[DB_PASSWORD_UNSET] Set DATABASE_PASSWORD to the raw database password. Keep the copied Session pooler URI in DATABASE_URL.')
     try:
         with database_trust() as ca_file:
-            return psycopg.connect(url, sslmode='verify-full', sslrootcert=ca_file,
-                connect_timeout=10, prepare_threshold=None, **extra)
+            try:
+                return psycopg.connect(url, sslmode='verify-full', sslrootcert=ca_file,
+                    connect_timeout=10, prepare_threshold=None, **extra)
+            except Exception as error:
+                message = database_error_message(error)
+                if message.startswith('[DB_TLS]'):
+                    message = probe_database_tls(url, ca_file)
+                raise SetupError(message) from None
     except SetupError:
         raise
     except Exception as error:
