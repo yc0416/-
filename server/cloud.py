@@ -19,8 +19,41 @@ if os.environ.get('GALLERY_REQUIRE_CLOUD') == '1' and not ENABLED:
 if ENABLED and (urlsplit(SUPABASE_URL).scheme != 'https' or not urlsplit(SUPABASE_URL).hostname):
     raise RuntimeError('SUPABASE_URL must be an HTTPS project URL.')
 
+class SetupError(Exception):
+    """Contains only predefined messages safe for public deployment logs."""
+
 class StorageError(Exception):
-    pass
+    def __init__(self, message, status=None):
+        super().__init__(message)
+        self.status = status
+
+def database_error_message(error):
+    # Inspect driver details locally but never return them: URI/passwords can
+    # appear in parsing errors. Only emit one of these fixed diagnostic strings.
+    detail = str(error).lower()
+    state = getattr(error, 'sqlstate', None)
+    if state in ('28P01', '28000') or any(x in detail for x in ('password authentication failed', 'wrong password', 'tenant or user not found')):
+        return '[DB_AUTH] Check the database password and Session pooler username (postgres.PROJECT_REF).'
+    if any(x in detail for x in ('certificate', 'sslrootcert', 'tls', 'ssl error')):
+        return '[DB_TLS] Database certificate verification failed. Configure the trusted Supabase CA file with GALLERY_DB_CA_FILE; keep TLS verification enabled.'
+    if any(x in detail for x in ('resolve', 'name resolution', 'network is unreachable', 'timeout', 'timed out', 'connection refused')):
+        return '[DB_NETWORK] Database could not be reached. Copy the Session pooler URI (IPv4, port 5432) from Supabase Connect and check project status.'
+    if state == '42501':
+        return '[DB_PERMISSIONS] Use the postgres Session pooler account so the app can create its private gallery schema.'
+    if any(x in detail for x in ('invalid', 'parse', 'missing', 'uri', 'percent')):
+        return '[DB_URI] DATABASE_URL is not a valid PostgreSQL URI. Check password URL encoding and remove surrounding quotes.'
+    return '[DB_CONNECT] Database connection failed. Check Session pooler URI, password and Supabase project status.'
+
+def connect_database(**extra):
+    import psycopg
+    if 'YOUR-PASSWORD' in DATABASE_URL.upper() or 'YOUR_PASSWORD' in DATABASE_URL.upper():
+        raise SetupError('[DB_PASSWORD_UNSET] Replace the password placeholder in DATABASE_URL with the actual database password (URL encoded).')
+    try:
+        return psycopg.connect(DATABASE_URL, sslmode='verify-full',
+            sslrootcert=os.environ.get('GALLERY_DB_CA_FILE', 'system'),
+            connect_timeout=10, prepare_threshold=None, **extra)
+    except Exception as error:
+        raise SetupError(database_error_message(error)) from None
 
 def storage_request(method, path, content=None, content_type='image/jpeg'):
     headers = {'apikey': SERVICE_KEY, 'Authorization': f'Bearer {SERVICE_KEY}'}
@@ -34,17 +67,23 @@ def storage_request(method, path, content=None, content_type='image/jpeg'):
         # Never expose key, request headers, database URL, or upstream response body.
         if method == 'DELETE' and error.code == 404:
             return b''
-        raise StorageError(f'Private photo storage request failed ({error.code}).') from None
+        raise StorageError(f'Private photo storage request failed ({error.code}).', status=error.code) from None
     except (URLError, TimeoutError, OSError):
         raise StorageError('Private photo storage is temporarily unavailable.') from None
 
 def verify_storage():
     try:
         bucket = json.loads(storage_request('GET', f'bucket/{BUCKET}'))
-    except (ValueError, StorageError):
-        raise RuntimeError('Create the private gallery-images bucket and verify the server-only Supabase service_role key.') from None
-    if bucket.get('public') is not False:
-        raise RuntimeError('gallery-images must be a PRIVATE bucket.')
+    except StorageError as error:
+        if error.status in (401, 403):
+            raise SetupError('[STORAGE_KEY] Storage rejected the key. Use the legacy service_role key from the SAME Supabase project, not anon/Publishable key.') from None
+        if error.status == 404:
+            raise SetupError('[STORAGE_BUCKET] Create a PRIVATE bucket named gallery-images in this Supabase project.') from None
+        raise SetupError('[STORAGE_NETWORK] Storage is unavailable. Check SUPABASE_URL and Supabase project status.') from None
+    except ValueError:
+        raise SetupError('[STORAGE_RESPONSE] SUPABASE_URL did not return a valid Storage response. Copy the project HTTPS URL.') from None
+    if not isinstance(bucket, dict) or bucket.get('public') is not False:
+        raise SetupError('[STORAGE_PUBLIC] gallery-images must be a PRIVATE bucket. Turn Public bucket OFF.')
 
 def image_path(iid, authenticated=False):
     return f'object/{"authenticated/" if authenticated else ""}{BUCKET}/{iid}.jpg'
@@ -69,11 +108,7 @@ class Cursor:
 
 class Connection:
     def __init__(self):
-        import psycopg
-        # verify-full checks both the CA and hostname. Never downgrade cloud TLS.
-        self.raw = psycopg.connect(DATABASE_URL, sslmode='verify-full',
-            sslrootcert=os.environ.get('GALLERY_DB_CA_FILE', 'system'),
-            connect_timeout=10, prepare_threshold=None, row_factory=row_factory)
+        self.raw = connect_database(row_factory=row_factory)
         self.raw.execute('SET search_path TO gallery, public')
         self.raw.execute("SET statement_timeout TO '15s'")
         self.uploaded = []
@@ -149,10 +184,7 @@ CREATE INDEX IF NOT EXISTS attempts_time_idx ON attempts(created_at);
 '''
 
 def initialize():
-    import psycopg
-    with psycopg.connect(DATABASE_URL, sslmode='verify-full',
-            sslrootcert=os.environ.get('GALLERY_DB_CA_FILE', 'system'), connect_timeout=10,
-            prepare_threshold=None) as db:
+    with connect_database() as db:
         # Serialize schema initialization if multiple worker starts overlap.
         db.execute('SELECT pg_advisory_xact_lock(7041601)')
         db.execute(SCHEMA, prepare=False)

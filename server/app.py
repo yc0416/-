@@ -45,8 +45,10 @@ def connect():
 if cloud.ENABLED:
     try:
         cloud.initialize()
+    except cloud.SetupError as error:
+        raise RuntimeError('SUPABASE_SETUP_ERROR ' + str(error)) from None
     except Exception:
-        raise RuntimeError('Supabase initialization failed. Verify the database session-pooler connection, TLS certificate, service_role key and PRIVATE gallery-images bucket in Render settings.') from None
+        raise RuntimeError('SUPABASE_SETUP_ERROR [DB_SCHEMA] Database schema initialization failed. Verify postgres account permissions and existing gallery schema compatibility.') from None
 else:
     with connect() as db:
         db.executescript('''
