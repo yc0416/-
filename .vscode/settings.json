@@ -3,7 +3,21 @@
   "editor.tabSize": 2,
   "python.testing.unittestEnabled": true,
   "python.testing.pytestEnabled": false,
-  "python.testing.unittestArgs": ["-v", "-s", "./tests", "-p", "test_*.py"],
-  "files.watcherExclude": { "**/node_modules/**": true, "**/.local/**": true },
-  "search.exclude": { "**/package-lock.json": true, "**/.local/**": true, "**/dist/**": true }
+  "python.testing.unittestArgs": [
+    "-v",
+    "-s",
+    "./tests",
+    "-p",
+    "test_*.py"
+  ],
+  "files.watcherExclude": {
+    "**/node_modules/**": true,
+    "**/.local/**": true
+  },
+  "search.exclude": {
+    "**/package-lock.json": true,
+    "**/.local/**": true,
+    "**/dist/**": true
+  },
+  "python.defaultInterpreterPath": "${workspaceFolder}/.venv"
 }

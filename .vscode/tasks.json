@@ -4,39 +4,110 @@
     {
       "label": "Gallery: Install",
       "type": "shell",
-      "command": "npm ci",
-      "options": { "cwd": "${workspaceFolder}" },
-      "problemMatcher": []
+      "command": "npm ci && npm run setup",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "windows": {
+        "options": {
+          "cwd": "${workspaceFolder}",
+          "shell": {
+            "executable": "cmd.exe",
+            "args": [
+              "/d",
+              "/c"
+            ]
+          }
+        }
+      }
     },
     {
       "label": "Gallery: API",
       "type": "shell",
       "command": "npm run server",
-      "options": { "cwd": "${workspaceFolder}" },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "isBackground": true,
       "problemMatcher": {
         "owner": "gallery-api",
-        "pattern": { "regexp": "^(__no_diagnostics__):(\\d+):(.*)$", "file": 1, "line": 2, "message": 3 },
-        "background": { "activeOnStart": true, "beginsPattern": ".*", "endsPattern": "Gallery server listening on port 8000" }
+        "pattern": {
+          "regexp": "^(__no_diagnostics__):(\\d+):(.*)$",
+          "file": 1,
+          "line": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": "Gallery server listening on port 8000"
+        }
       },
-      "presentation": { "panel": "dedicated", "reveal": "always", "group": "gallery" }
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "group": "gallery"
+      },
+      "windows": {
+        "options": {
+          "cwd": "${workspaceFolder}",
+          "shell": {
+            "executable": "cmd.exe",
+            "args": [
+              "/d",
+              "/c"
+            ]
+          }
+        }
+      }
     },
     {
       "label": "Gallery: Web",
       "type": "shell",
       "command": "npm run dev",
-      "options": { "cwd": "${workspaceFolder}" },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "isBackground": true,
       "problemMatcher": {
         "owner": "gallery-web",
-        "pattern": { "regexp": "^(__no_diagnostics__):(\\d+):(.*)$", "file": 1, "line": 2, "message": 3 },
-        "background": { "activeOnStart": true, "beginsPattern": ".*", "endsPattern": ".*Local:.*5173.*" }
+        "pattern": {
+          "regexp": "^(__no_diagnostics__):(\\d+):(.*)$",
+          "file": 1,
+          "line": 2,
+          "message": 3
+        },
+        "background": {
+          "activeOnStart": true,
+          "beginsPattern": ".*",
+          "endsPattern": ".*Local:.*5173.*"
+        }
       },
-      "presentation": { "panel": "dedicated", "reveal": "always", "group": "gallery" }
+      "presentation": {
+        "panel": "dedicated",
+        "reveal": "always",
+        "group": "gallery"
+      },
+      "windows": {
+        "options": {
+          "cwd": "${workspaceFolder}",
+          "shell": {
+            "executable": "cmd.exe",
+            "args": [
+              "/d",
+              "/c"
+            ]
+          }
+        }
+      }
     },
     {
       "label": "Gallery: Start",
-      "dependsOn": ["Gallery: API", "Gallery: Web"],
+      "dependsOn": [
+        "Gallery: API",
+        "Gallery: Web"
+      ],
       "dependsOrder": "parallel",
       "problemMatcher": []
     },
@@ -44,17 +115,48 @@
       "label": "Gallery: Build",
       "type": "shell",
       "command": "npm run build",
-      "options": { "cwd": "${workspaceFolder}" },
-      "group": { "kind": "build", "isDefault": true },
-      "problemMatcher": []
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": [],
+      "windows": {
+        "options": {
+          "cwd": "${workspaceFolder}",
+          "shell": {
+            "executable": "cmd.exe",
+            "args": [
+              "/d",
+              "/c"
+            ]
+          }
+        }
+      }
     },
     {
       "label": "Gallery: Test",
       "type": "shell",
       "command": "npm test",
-      "options": { "cwd": "${workspaceFolder}" },
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
       "group": "test",
-      "problemMatcher": []
+      "problemMatcher": [],
+      "windows": {
+        "options": {
+          "cwd": "${workspaceFolder}",
+          "shell": {
+            "executable": "cmd.exe",
+            "args": [
+              "/d",
+              "/c"
+            ]
+          }
+        }
+      }
     }
   ]
 }

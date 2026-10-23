@@ -1,3 +1,5 @@
+import base64
+import io
 import http.cookiejar
 import json
 import os
@@ -19,7 +21,9 @@ class GalleryTest(unittest.TestCase):
             s.bind(('127.0.0.1', 0))
             port = s.getsockname()[1]
         cls.base = f'http://127.0.0.1:{port}'
-        cls.process = subprocess.Popen([sys.executable, 'server/app.py'], cwd=Path(__file__).resolve().parents[1], env={**os.environ, 'PORT': str(port), 'GALLERY_DATA_DIR': cls.temp.name, 'GALLERY_INVITE_CODE': 'test-invite'}, stdout=subprocess.DEVNULL)
+        command = [sys.executable, '-m', 'gunicorn', '--bind', f'127.0.0.1:{port}', '--workers', '1', '--threads', '4', 'server.wsgi:application'] if os.environ.get('GALLERY_TEST_WSGI') else [sys.executable, 'server/app.py']
+        cls.server_env = {**os.environ, 'PORT': str(port), 'GALLERY_DATA_DIR': cls.temp.name, 'GALLERY_INVITE_CODE': 'test-invite'}
+        cls.process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1], env=cls.server_env, stdout=subprocess.DEVNULL)
         for _ in range(100):
             try:
                 urllib.request.urlopen(cls.base+'/api/health', timeout=1).close()
@@ -76,6 +80,61 @@ class GalleryTest(unittest.TestCase):
         self.assertEqual(self.req(a,f'/posts/{pid}')[0],200)
         self.assertEqual(self.req(a,f'/posts/{pid}',{},'DELETE')[0],200)
         self.assertEqual(self.req(b,f'/posts/{pid}')[0],404)
+
+    def test_images_edit_and_comment_permissions(self):
+        from PIL import Image
+        a, b, guest = self.client(), self.client(), self.client()
+        for client, name in ((a, 'photoauthor'), (b, 'photofriend')):
+            self.assertEqual(self.req(client, '/signup', {'username':name,'nickname':name,'password':'password123','inviteCode':'test-invite'})[0],200)
+        output = io.BytesIO()
+        Image.new('RGB',(20,20),'green').save(output,'PNG')
+        image = {'data':base64.b64encode(output.getvalue()).decode()}
+        data = {'title':'사진 글','content':'내용','galleryId':'free','images':[image]}
+        status, result = self.req(a,'/posts',data)
+        self.assertEqual(status,201)
+        pid=result['id']
+        post=self.req(a,f'/posts/{pid}')[1]['post']
+        url=post['images'][0]['url']
+        self.assertEqual(self.req(guest,url.removeprefix('/api'))[0],401)
+        with b.open(self.base+url) as r:
+            self.assertEqual(r.headers['Content-Type'],'image/jpeg')
+            self.assertEqual(Image.open(io.BytesIO(r.read())).size,(20,20))
+        self.assertEqual(self.req(b,f'/posts/{pid}',data,'PUT')[0],403)
+        data.update(title='수정된 제목',images=[{'id':post['images'][0]['id']}])
+        self.assertEqual(self.req(a,f'/posts/{pid}',data,'PUT')[0],200)
+        post=self.req(a,f'/posts/{pid}')[1]['post']
+        self.assertEqual(post['title'],'수정된 제목')
+        self.assertEqual(post['images'][0]['url'],url)
+        # Invalid uploads must not erase attachments or change content.
+        self.assertEqual(self.req(a,f'/posts/{pid}',{**data,'title':'bad','images':[{'data':'bad'}]},'PUT')[0],400)
+        self.assertEqual(self.req(a,f'/posts/{pid}')[1]['post']['title'],'수정된 제목')
+        self.assertEqual(self.req(a,'/posts',{**data,'images':[image]*4})[0],400)
+        self.assertEqual(self.req(a,'/posts',{**data,'images':[{'data':base64.b64encode(b'<svg/>').decode()}]})[0],400)
+        self.assertEqual(self.req(b,f'/posts/{pid}/comments',{'content':'내 댓글'})[0],201)
+        comment=self.req(b,f'/posts/{pid}')[1]['post']['comments'][0]
+        self.assertTrue(comment['mine'])
+        cid=comment['id']
+        self.assertEqual(self.req(a,f'/comments/{cid}',{},'DELETE')[0],403)
+        self.assertEqual(self.req(b,f'/comments/{cid}',{},'DELETE')[0],200)
+        self.assertEqual(self.req(a,f'/posts/{pid}')[1]['post']['comments'],[])
+        # Restart against the same on-disk database: images and sessions survive.
+        cls = type(self)
+        command = cls.process.args
+        cls.process.terminate()
+        cls.process.wait(timeout=5)
+        cls.process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1], env=cls.server_env, stdout=subprocess.DEVNULL)
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(self.base+'/api/health', timeout=1).close()
+                break
+            except OSError:
+                time.sleep(.05)
+        self.assertEqual(self.req(a,f'/posts/{pid}')[1]['post']['title'],'수정된 제목')
+        with b.open(self.base+url) as response:
+            self.assertEqual(response.status,200)
+        self.assertEqual(self.req(a,f'/posts/{pid}',{**data,'images':[]},'PUT')[0],200)
+        self.assertEqual(self.req(b,url.removeprefix('/api'))[0],404)
+        self.assertEqual(self.req(a,f'/posts/{pid}',{},'DELETE')[0],200)
 
 if __name__ == '__main__':
     unittest.main()

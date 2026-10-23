@@ -1,0 +1,8 @@
+.git
+node_modules
+dist
+.local
+.venv
+.env
+__pycache__
+*.zip

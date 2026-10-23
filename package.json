@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "server": "node scripts/python.mjs server/app.py",
     "start": "node scripts/python.mjs server/app.py",
-    "test": "node scripts/python.mjs -m unittest discover -s tests -v"
+    "test": "node scripts/python.mjs -m unittest discover -s tests -v",
+    "setup": "node scripts/python.mjs -m venv .venv && node scripts/python.mjs -m pip install -r requirements.txt"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",

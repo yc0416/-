@@ -1,8 +1,12 @@
 import { spawn, spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const candidates = process.platform === 'win32'
   ? [['py', '-3'], ['python'], ['python3']]
   : [['python3'], ['python']];
+const venv = fileURLToPath(new URL(process.platform === 'win32' ? '../.venv/Scripts/python.exe' : '../.venv/bin/python', import.meta.url));
+if (existsSync(venv) && !(process.argv[2] === '-m' && process.argv[3] === 'venv')) candidates.unshift([venv]);
 const selected = candidates.find(([command, ...prefix]) => {
   const probe = spawnSync(command, [...prefix, '-c', 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'], { stdio: 'ignore' });
   return probe.status === 0;
