@@ -12,6 +12,15 @@ class CloudDiagnosticsTests(unittest.TestCase):
                 self.assertNotIn('PRIVATE_PASSWORD',message)
                 self.assertNotIn('example.invalid',message)
 
+    def test_separate_password_avoids_uri_encoding(self):
+        url='postgresql://postgres.example:[YOUR-PASSWORD]@localhost:5432/postgres'
+        password='Dummy:@#%/[]? password'
+        with patch.object(cloud,'DATABASE_URL',url), patch.dict('os.environ',{'DATABASE_PASSWORD':password}), patch('psycopg.connect') as connect:
+            cloud.connect_database()
+            self.assertEqual(connect.call_args.args[0],url.replace('[YOUR-PASSWORD]',''))
+            self.assertEqual(connect.call_args.kwargs['password'],password)
+            self.assertEqual(connect.call_args.kwargs['sslmode'],'verify-full')
+
     def test_storage_failures_are_distinct_and_safe(self):
         for status, code in [(401,'STORAGE_KEY'),(403,'STORAGE_KEY'),(404,'STORAGE_BUCKET'),(503,'STORAGE_NETWORK')]:
             with self.subTest(status=status), patch.object(cloud,'storage_request',side_effect=cloud.StorageError('PRIVATE_UPSTREAM_BODY',status)):

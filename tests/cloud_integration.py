@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import quote
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -62,15 +63,15 @@ with tempfile.TemporaryDirectory(prefix='gallery-cloud-') as folder:
     (tls/'server.crt').chmod(0o644)
     # A private temporary key is copied into this disposable PostgreSQL container.
     db_port, storage_port=port(),port()
-    password=secrets.token_urlsafe(24)
+    password=secrets.token_urlsafe(24)+'@:#%/?[]'
     container='gallery-pg-'+secrets.token_hex(4)
     context=ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     context.load_cert_chain(str(tls/'server.crt'),str(tls/'server.key'))
     storage=ThreadingHTTPServer(('127.0.0.1',storage_port),Storage)
     storage.socket=context.wrap_socket(storage.socket,server_side=True)
     thread=threading.Thread(target=storage.serve_forever,daemon=True);thread.start()
-    db_url=f'postgresql://postgres:{password}@localhost:{db_port}/postgres'
-    env={**os.environ,'DATABASE_URL':db_url,'SUPABASE_URL':f'https://localhost:{storage_port}',
+    db_url=f'postgresql://postgres:{quote(password,safe="")}@localhost:{db_port}/postgres'
+    env={**os.environ,'DATABASE_URL':db_url.replace(quote(password,safe=''),'[YOUR-PASSWORD]'),'DATABASE_PASSWORD':password,'SUPABASE_URL':f'https://localhost:{storage_port}',
         'SUPABASE_SERVICE_ROLE_KEY':KEY,'SSL_CERT_FILE':str(tls/'server.crt'),
         'GALLERY_DB_CA_FILE':str(tls/'server.crt'),'GALLERY_REQUIRE_CLOUD':'1','GALLERY_TEST_WSGI':'1','GALLERY_TEST_CLOUD':'1'}
     try:

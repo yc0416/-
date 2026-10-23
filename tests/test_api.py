@@ -24,7 +24,7 @@ class GalleryTest(unittest.TestCase):
         command = [sys.executable, '-m', 'gunicorn', '--bind', f'127.0.0.1:{port}', '--workers', '1', '--threads', '4', 'server.wsgi:application'] if os.environ.get('GALLERY_TEST_WSGI') else [sys.executable, 'server/app.py']
         cls.server_env = {**os.environ, 'PORT': str(port), 'GALLERY_DATA_DIR': cls.temp.name, 'GALLERY_INVITE_CODE': 'test-invite'}
         if os.environ.get('GALLERY_TEST_CLOUD') != '1':
-            for name in ('DATABASE_URL', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'GALLERY_REQUIRE_CLOUD'):
+            for name in ('DATABASE_URL', 'DATABASE_PASSWORD', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'GALLERY_REQUIRE_CLOUD'):
                 cls.server_env.pop(name, None)
 
         cls.process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[1], env=cls.server_env, stdout=subprocess.DEVNULL)

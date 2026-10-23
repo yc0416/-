@@ -46,10 +46,23 @@ def database_error_message(error):
 
 def connect_database(**extra):
     import psycopg
-    if 'YOUR-PASSWORD' in DATABASE_URL.upper() or 'YOUR_PASSWORD' in DATABASE_URL.upper():
-        raise SetupError('[DB_PASSWORD_UNSET] Replace the password placeholder in DATABASE_URL with the actual database password (URL encoded).')
+    url = DATABASE_URL
+    password = os.environ.get('DATABASE_PASSWORD')
+    if len(url) >= 2 and url[0] == url[-1] and url[0] in ('"', "'"):
+        url = url[1:-1]
+    if not url.startswith(('postgresql://', 'postgres://')):
+        raise SetupError('[DB_URI] Copy only the PostgreSQL URI from Supabase Session pooler, not a psql command or a DATABASE_URL= assignment.')
+    markers = ('[YOUR-PASSWORD]', '[YOUR_PASSWORD]')
+    if password:
+        # Keep the copied template untouched in Render. Pass the raw password
+        # as a driver parameter, avoiding URL encoding of @, #, %, / etc.
+        for marker in markers:
+            url = url.replace(marker, '')
+        extra['password'] = password
+    elif any(marker in url.upper() for marker in markers):
+        raise SetupError('[DB_PASSWORD_UNSET] Set DATABASE_PASSWORD to the raw database password. Keep the copied Session pooler URI in DATABASE_URL.')
     try:
-        return psycopg.connect(DATABASE_URL, sslmode='verify-full',
+        return psycopg.connect(url, sslmode='verify-full',
             sslrootcert=os.environ.get('GALLERY_DB_CA_FILE', 'system'),
             connect_timeout=10, prepare_threshold=None, **extra)
     except Exception as error:

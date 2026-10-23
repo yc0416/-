@@ -112,7 +112,7 @@ Supabase 프로젝트 왼쪽 **Storage → New bucket**에서 아래처럼 생�
 
 ### 2. 서버 연결 정보 확인
 
-프로젝트 상단 **Connect → Connection String**에서 **Session pooler**(일반적으로 포트 5432)의 PostgreSQL URI를 확인합니다. 무료 프로젝트의 Direct connection은 IPv6 전용일 수 있으므로 Render 연결에는 IPv4를 지원하는 pooler를 사용합니다. URI의 비밀번호 자리에는 프로젝트 생성 시 설정한 **데이터베이스 비밀번호**를 사용하세요. 특수문자는 URI 인코딩이 필요합니다. 로그인 비밀번호나 GitHub 비밀번호가 아닙니다.
+프로젝트 상단 **Connect → Connection String**에서 **Session pooler**(일반적으로 포트 5432)의 PostgreSQL URI를 확인합니다. 무료 프로젝트의 Direct connection은 IPv6 전용일 수 있으므로 Render 연결에는 IPv4를 지원하는 pooler를 사용합니다. 연결 URI는 `[YOUR-PASSWORD]`를 그대로 둔 상태로 복사하세요. 비밀번호는 별도 `DATABASE_PASSWORD` 환경변수에 입력하므로 특수문자 인코딩이 필요하지 않습니다. 로그인 비밀번호나 GitHub 비밀번호가 아닙니다.
 
 프로젝트 **Settings → API Keys → Legacy anon, service_role API keys**에서 **service_role** 키를 확인합니다. `anon` 또는 Publishable key가 아닙니다. 이 키와 데이터베이스 URI는 Render의 서버 환경변수에만 입력하세요. GitHub, 프런트엔드 코드, `VITE_` 변수, 채팅, 스크린샷에 노출하면 안 됩니다.
 
@@ -124,7 +124,8 @@ Supabase 프로젝트 왼쪽 **Storage → New bucket**에서 아래처럼 생�
 
 | 이름 | 값 |
 | --- | --- |
-| `DATABASE_URL` | 위 Session pooler PostgreSQL 연결 URI (비밀번호 포함) |
+| `DATABASE_URL` | 위 Session pooler PostgreSQL 연결 URI (`[YOUR-PASSWORD]` 그대로 복사) |
+| `DATABASE_PASSWORD` | 프로젝트 생성 시 정한 실제 DB 비밀번호를 그대로 입력 (인코딩·따옴표 불필요) |
 | `SUPABASE_URL` | 프로젝트 홈에서 복사한 `https://프로젝트ID.supabase.co` |
 | `SUPABASE_SERVICE_ROLE_KEY` | 서버 전용 legacy `service_role` 키 |
 | `GALLERY_INVITE_CODE` | 친구들에게만 공유할 충분히 긴 무작위 초대 코드. 기존 코드가 있으면 유지 |
