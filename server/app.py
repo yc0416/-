@@ -13,11 +13,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
 
+try:
+    from server import cloud
+except ModuleNotFoundError:
+    import cloud
+
 ROOT = Path(__file__).resolve().parents[1]
 DATA = Path(os.environ.get('GALLERY_DATA_DIR', ROOT / '.local'))
 DATA.mkdir(parents=True, exist_ok=True)
 DB = DATA / 'gallery.sqlite3'
 INVITE = os.environ.get('GALLERY_INVITE_CODE')
+if cloud.ENABLED and not INVITE:
+    raise RuntimeError('Cloud mode requires a persistent GALLERY_INVITE_CODE in Render Environment.')
 if not INVITE:
     invite_file = DATA / 'invite-code'
     if not invite_file.exists():
@@ -28,22 +35,30 @@ SECURE = os.environ.get('GALLERY_SECURE_COOKIE') == '1'
 GALLERIES = [{'id': 'free', 'name': '자유 갤러리', 'description': '소소한 일상부터 주말 약속까지'}, {'id': 'game', 'name': '게임 갤러리', 'description': '오늘의 파티원을 구해 보세요'}, {'id': 'meme', 'name': '유머 갤러리', 'description': '혼자 보기 아까운 웃긴 이야기'}]
 
 def connect():
+    if cloud.ENABLED:
+        return cloud.Connection()
     db = sqlite3.connect(DB, timeout=15)
     db.row_factory = sqlite3.Row
     db.execute('PRAGMA foreign_keys = ON')
     return db
 
-with connect() as db:
-    db.executescript('''
-    PRAGMA journal_mode=WAL;
-    CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, nickname TEXT NOT NULL, salt TEXT NOT NULL, password TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS posts(id INTEGER PRIMARY KEY, gallery_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL, content TEXT NOT NULL, anonymous INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS comments(id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), content TEXT NOT NULL, created_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS votes(post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER REFERENCES users(id), value INTEGER CHECK(value IN (-1,1)), PRIMARY KEY(post_id,user_id));
-    CREATE TABLE IF NOT EXISTS attempts(ip TEXT NOT NULL, created_at INTEGER NOT NULL);
-    CREATE TABLE IF NOT EXISTS images(id TEXT PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, content BLOB NOT NULL);
-    ''')
+if cloud.ENABLED:
+    try:
+        cloud.initialize()
+    except Exception:
+        raise RuntimeError('Supabase initialization failed. Verify the database session-pooler connection, TLS certificate, service_role key and PRIVATE gallery-images bucket in Render settings.') from None
+else:
+    with connect() as db:
+        db.executescript('''
+        PRAGMA journal_mode=WAL;
+        CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, username TEXT UNIQUE NOT NULL, nickname TEXT NOT NULL, salt TEXT NOT NULL, password TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS posts(id INTEGER PRIMARY KEY, gallery_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES users(id), title TEXT NOT NULL, content TEXT NOT NULL, anonymous INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS comments(id INTEGER PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER NOT NULL REFERENCES users(id), content TEXT NOT NULL, created_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS votes(post_id INTEGER REFERENCES posts(id) ON DELETE CASCADE, user_id INTEGER REFERENCES users(id), value INTEGER CHECK(value IN (-1,1)), PRIMARY KEY(post_id,user_id));
+        CREATE TABLE IF NOT EXISTS attempts(ip TEXT NOT NULL, created_at INTEGER NOT NULL);
+        CREATE TABLE IF NOT EXISTS images(id TEXT PRIMARY KEY, post_id INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE, content BLOB NOT NULL);
+        ''')
 
 def password_hash(password, salt):
     return hashlib.scrypt(password.encode(), salt=bytes.fromhex(salt), n=16384, r=8, p=1).hex()
@@ -112,9 +127,13 @@ class Handler(BaseHTTPRequestHandler):
             self.handle_api(method, path)
         except ValueError as e:
             self.reply(400, {'error': str(e)})
+        except cloud.StorageError:
+            self.reply(503, {'error': '사진 저장소에 연결하지 못했습니다. 잠시 후 다시 시도하세요.'})
         except sqlite3.IntegrityError:
             self.reply(409, {'error': '이미 사용 중인 아이디입니다.'})
-        except Exception:
+        except Exception as error:
+            if cloud.ENABLED and getattr(error, 'sqlstate', None) == '23505':
+                return self.reply(409, {'error': '이미 사용 중인 아이디입니다.'})
             self.reply(500, {'error': '서버 오류가 발생했습니다. 잠시 후 다시 시도하세요.'})
 
     def handle_api(self, method, path):
@@ -144,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
             user = self.user(db)
             if path == '/api/health' and method == 'GET':
                 db.execute('SELECT 1').fetchone()
-                return self.reply(200, {'ok': True})
+                return self.reply(200, {'ok': True, 'storage': 'supabase' if cloud.ENABLED else 'local'})
             if path == '/api/me' and method == 'GET':
                 return self.reply(200, {'user': dict(user) if user else None})
             if path in ('/api/signup', '/api/login') and method == 'POST':
@@ -219,16 +238,20 @@ class Handler(BaseHTTPRequestHandler):
                         raise ValueError('읽을 수 없는 사진입니다. JPG, PNG, WebP 파일을 선택하세요.')
                 keep = [i[0] for i in prepared]
                 for iid in existing - set(keep):
+                    if cloud.ENABLED:
+                        db.queue_delete(iid)
                     db.execute('DELETE FROM images WHERE id=?', (iid,))
                 for iid, content in prepared:
                     if content is not None:
-                        db.execute('INSERT INTO images VALUES (?,?,?)', (iid, pid, content))
+                        if cloud.ENABLED:
+                            db.upload(iid, content)
+                        db.execute('INSERT INTO images VALUES (?,?,?)', (iid, pid, b'' if cloud.ENABLED else content))
 
             if path.startswith('/api/images/') and method == 'GET':
                 image = db.execute('SELECT content FROM images WHERE id=?', (path.rsplit('/', 1)[-1],)).fetchone()
                 if not image:
                     return self.reply(404, {'error': '사진을 찾을 수 없습니다.'})
-                raw = image['content']
+                raw = cloud.storage_request('GET', cloud.image_path(path.rsplit('/', 1)[-1], authenticated=True)) if cloud.ENABLED else image['content']
                 self.send_response(200)
                 self.send_header('Content-Type', 'image/jpeg')
                 self.send_header('Content-Length', str(len(raw)))
@@ -239,7 +262,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if path.startswith('/api/comments/') and method == 'DELETE':
                 cid = path.rsplit('/', 1)[-1]
-                comment = db.execute('SELECT user_id FROM comments WHERE id=?', (cid,)).fetchone()
+                if not cid.isdigit():
+                    return self.reply(404, {'error': '댓글을 찾을 수 없습니다.'})
+                comment = db.execute('SELECT user_id FROM comments WHERE id=?', (int(cid),)).fetchone()
                 if not comment:
                     return self.reply(404, {'error': '댓글을 찾을 수 없습니다.'})
                 if comment['user_id'] != uid:
@@ -264,7 +289,7 @@ class Handler(BaseHTTPRequestHandler):
                 vote = db.execute('SELECT value FROM votes WHERE post_id=? AND user_id=?', (p['id'], uid)).fetchone()
                 p['vote'] = vote[0] if vote else 0
                 p['comment_count'] = db.execute('SELECT count(*) FROM comments WHERE post_id=?', (p['id'],)).fetchone()[0]
-                p['images'] = [{'id': r[0], 'url': '/api/images/' + r[0]} for r in db.execute('SELECT id FROM images WHERE post_id=? ORDER BY rowid', (p['id'],))]
+                p['images'] = [{'id': r[0], 'url': '/api/images/' + r[0]} for r in db.execute('SELECT id FROM images WHERE post_id=? ORDER BY id', (p['id'],))]
                 del p['nickname'], p['user_id']
                 return p
             if path == '/api/posts' and method == 'GET':
@@ -308,6 +333,9 @@ class Handler(BaseHTTPRequestHandler):
                 if len(parts) == 3 and method == 'DELETE':
                     if row['user_id'] != uid:
                         return self.reply(403, {'error': '작성자만 삭제할 수 있습니다.'})
+                    if cloud.ENABLED:
+                        for image in db.execute('SELECT id FROM images WHERE post_id=?', (pid,)):
+                            db.queue_delete(image['id'])
                     db.execute('DELETE FROM posts WHERE id=?', (pid,))
                     db.commit()
                     return self.reply(200, {'ok': True})

@@ -96,20 +96,67 @@ npm.cmd run server
 
 새 터미널에서 `npm.cmd run dev`를 실행하세요. Node.js 경로 문제가 있으면 각 터미널에서 `$env:Path = "C:\Program Files\nodejs;" + $env:Path`를 먼저 실행하세요. 기존 `.local` 계정과 글은 그대로 유지되며 시작 시 사진 테이블만 추가됩니다. ZIP으로 받은 폴더에는 Git 이력이 없으므로 `git pull`을 실행할 수 없습니다. 새 버전을 별도 폴더에 복제하고, 모든 서버를 종료한 상태에서 기존 `.local` 폴더를 새 폴더로 복사한 뒤 실행하세요.
 
-## Render에 배포하기
+## Render + Supabase 무료 배포
 
-이 저장소의 `render.yaml`은 Docker 웹 서비스 1개와 1GB 영구 디스크를 선언합니다. **무료 구성이 아닙니다.** Render에서 표시하는 서비스·디스크 월 비용을 확인하고 진행하세요. 자동 확장은 사용하지 않으며 SQLite 파일을 여러 인스턴스가 공유하는 구조는 지원하지 않습니다.
+Render 무료 웹 서비스에서 웹/API를 실행하고, Supabase Free의 PostgreSQL 및 비공개 Storage에 데이터를 저장합니다. `render.yaml`은 Free 플랜이며 유료 디스크를 만들지 않습니다. Render 절전·재가동 지연 및 Supabase 무료 사용량/비활성 제한은 각 서비스 대시보드에서 확인하세요. 이 구성은 무료 한도 내 사용을 전제로 하며 무제한 운영을 보장하지 않습니다.
 
-1. https://dashboard.render.com 에서 GitHub 계정으로 가입/로그인합니다. 비밀번호나 결제 정보는 이 채팅에 보내지 마세요.
-2. **New → Blueprint**를 선택하고 GitHub 저장소 `yc0416/-`를 연결합니다. 저장소가 보이지 않으면 Render GitHub 연동에서 해당 저장소 접근을 허용합니다.
-3. 브랜치를 `main`으로 선택하고 Blueprint를 불러옵니다. `render.yaml`의 서비스와 영구 디스크를 확인합니다.
-4. `GALLERY_INVITE_CODE`에 친구들에게만 전달할 충분히 긴 무작위 초대 코드를 Render 화면에서 직접 입력합니다. `GALLERY_SECURE_COOKIE=1`, `GALLERY_DATA_DIR=/data`는 설정에 포함됩니다. 원치 않는 유료 플랜이면 생성하지 마세요.
-5. 비용과 설정을 확인한 뒤 배포합니다. Render가 제공하는 **HTTPS 주소**를 사용합니다. GitHub Pages는 Python API와 SQLite 서버를 실행하지 못하므로 사용할 수 없습니다.
-6. 배포 주소의 `/api/health`가 `{"ok":true}`인지 확인한 뒤 회원가입 → 사진 글 작성 → 수정 → 댓글 삭제를 확인합니다. 로그인하지 않은 시크릿 창에서는 글과 사진을 읽을 수 없어야 합니다.
-7. Render에서 서비스를 재시작한 뒤 로그인하여 글·사진이 유지되는지 확인합니다. 이 확인 전에는 영구 저장 검증이 완료된 것이 아닙니다.
+### 1. Supabase 사진 저장소
 
-배포는 본인 PC와 별도 데이터베이스로 시작합니다. 로컬 계정과 글이 자동으로 옮겨지지 않으므로 배포 사이트에서 새로 가입하세요. 기존 데이터 이전을 원하면 별도 백업·이전 절차가 필요합니다.
+Supabase 프로젝트 왼쪽 **Storage → New bucket**에서 아래처럼 생성합니다.
 
-운영에서는 Gunicorn WSGI 서버가 빌드된 웹과 API를 함께 제공합니다. Docker 이미지는 앱 소스와 빌드 결과만 포함하며 로컬 데이터/초대 코드/가상환경은 포함하지 않습니다. 이 작업 환경에서는 공개 사이트 생성이나 Render 계정 연결이 이루어지지 않았습니다. 실제 공개 주소, Render의 TLS·디스크 연결 및 재시작 후 보존은 배포 후 검증해야 합니다. 백업은 SQLite의 온라인 backup API로 생성하고 별도 위치에 보관하세요. 실행 중인 DB 파일 하나만 복사하면 WAL의 최신 데이터가 누락될 수 있습니다.
+- 이름: `gallery-images` (정확히 동일)
+- **Public bucket: OFF** — 반드시 비공개
+- 파일 크기 제한: 4MB, 허용 MIME 타입: `image/jpeg` (서버가 변환한 JPEG만 저장)
 
-사내 프록시 등 별도 인증기관이 필요한 빌드 환경에서는 Docker BuildKit의 `build_ca` secret에 신뢰하는 PEM CA 묶음을 전달할 수 있습니다. 전달하지 않으면 기본 시스템 인증서 검증을 사용합니다. TLS 검증을 끄지 마세요.
+브라우저용 공개 정책을 추가하지 마세요. 회원 인증을 통과한 Python API가 서버 전용 키로 사진을 읽고 전달합니다. 가입·로그인도 기존 자체 인증을 유지하며 Supabase Auth 사용자 목록과는 별개입니다.
+
+### 2. 서버 연결 정보 확인
+
+프로젝트 상단 **Connect → Connection String**에서 **Session pooler**(일반적으로 포트 5432)의 PostgreSQL URI를 확인합니다. 무료 프로젝트의 Direct connection은 IPv6 전용일 수 있으므로 Render 연결에는 IPv4를 지원하는 pooler를 사용합니다. URI의 비밀번호 자리에는 프로젝트 생성 시 설정한 **데이터베이스 비밀번호**를 사용하세요. 특수문자는 URI 인코딩이 필요합니다. 로그인 비밀번호나 GitHub 비밀번호가 아닙니다.
+
+프로젝트 **Settings → API Keys → Legacy anon, service_role API keys**에서 **service_role** 키를 확인합니다. `anon` 또는 Publishable key가 아닙니다. 이 키와 데이터베이스 URI는 Render의 서버 환경변수에만 입력하세요. GitHub, 프런트엔드 코드, `VITE_` 변수, 채팅, 스크린샷에 노출하면 안 됩니다.
+
+### 3. Render 환경변수 설정
+
+**기존 무료 Render에 보관할 글/사진이 있다면 먼저 백업하세요. 환경변수 저장·재배포도 임시 데이터를 지울 수 있습니다.**
+
+기존 `laputa` Render 서비스의 **Environment → Add environment variable**에서 아래 값을 추가/확인한 뒤 **한 번에 저장·재배포**하세요. Supabase 프로젝트나 기존 Render 서비스를 삭제할 필요는 없습니다.
+
+| 이름 | 값 |
+| --- | --- |
+| `DATABASE_URL` | 위 Session pooler PostgreSQL 연결 URI (비밀번호 포함) |
+| `SUPABASE_URL` | 프로젝트 홈에서 복사한 `https://프로젝트ID.supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | 서버 전용 legacy `service_role` 키 |
+| `GALLERY_INVITE_CODE` | 친구들에게만 공유할 충분히 긴 무작위 초대 코드. 기존 코드가 있으면 유지 |
+| `GALLERY_SECURE_COOKIE` | `1` |
+| `GALLERY_REQUIRE_CLOUD` | `1` |
+| `GALLERY_DATA_DIR` | `/tmp/gallery` |
+
+서버는 시작 시 `gallery` 전용 스키마와 필요한 표를 자동 생성합니다. `public`의 기존 표를 변경하지 않습니다. 앱 표에는 RLS를 켜고 `anon`/`authenticated` 역할의 접근을 차단합니다. 비밀번호 해시·세션은 브라우저에 노출되지 않습니다. Supabase **Table Editor**에서는 `public` 대신 `gallery` 스키마를 선택해야 앱 표가 보입니다. 이 스키마를 Data API의 exposed schemas에 추가하지 마세요.
+
+`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`는 모두 있어야 합니다. 일부만 설정하면 시작을 거부하며, `GALLERY_REQUIRE_CLOUD=1`에서는 설정이 빠졌다고 로컬 SQLite로 조용히 돌아가지 않습니다. PostgreSQL은 `verify-full` TLS로 서버 인증서를 검증합니다. 대시보드가 별도 CA를 요구하면 Render Secret Files에 CA 인증서를 등록하고 `GALLERY_DB_CA_FILE`에 해당 파일 경로를 지정하세요. TLS 검증을 끄지 마세요.
+
+### 4. 실제 배포 확인
+
+1. 이 전환 코드는 GitHub `supabase-free` 브랜치에 있습니다. 연결 정보와 기존 자료 보관을 준비한 뒤 Render **Settings → Build & Deploy → Branch**를 `supabase-free`로 변경하고 재배포합니다. `main`은 기존 버전으로 유지해 준비 전에 자동 배포되지 않도록 했습니다.
+2. 배포 주소 `/api/health`가 `{"ok":true,"storage":"supabase"}`인지 확인합니다. `storage:local`이면 아직 Supabase 연결 전입니다.
+3. 초대 코드로 새 계정을 만들고 사진 글 작성 → 수정 → 댓글 삭제를 확인합니다.
+4. Render 서비스를 재시작한 뒤 글·사진·계정이 유지되는지 확인합니다. 이 확인 전에는 실제 Supabase 배포 검증이 완료된 것이 아닙니다.
+5. 비회원 시크릿 창에서 `/api/posts`와 사진 URL을 열면 401이어야 합니다. Supabase 사진 버킷도 비공개여야 합니다.
+
+기존 PC 및 무료 Render의 SQLite 계정·게시글·사진은 자동 이전되지 않습니다. 기존 자료가 필요하면 **재배포 전** 로컬 `.local`을 백업하고, 실행 중인 DB는 SQLite 온라인 backup API로 보관하세요. 무료 Render의 기존 데이터는 이미 사라졌을 수 있습니다. 클라우드 전환 후에는 새로 가입해야 합니다. 기존 DB를 삭제하거나 덮어쓰는 마이그레이션은 수행하지 않습니다.
+
+사진은 Storage에, 사진 메타데이터는 PostgreSQL에 저장합니다. 글/사진 삭제가 DB에 반영된 뒤 Storage 삭제를 처리하며 실패한 삭제는 다음 쓰기에서 재시도합니다. 업로드 중 프로세스가 강제 종료되는 경우 참조되지 않는 파일이 남을 수 있으므로 운영 시 Storage 사용량을 확인하세요. Free 플랜의 백업 기능을 가정하지 말고 별도 백업도 준비하세요.
+
+### 로컬 검증
+
+```sh
+npm ci
+npm run setup
+npm test
+npm run build
+```
+
+Supabase 변수를 설정하지 않은 PC에서는 기존 SQLite로 실행합니다. `npm test`는 실제 클라우드 변수와 분리된 임시 SQLite를 사용해야 하며 운영 계정을 대상으로 테스트하지 마세요. 선택적 클라우드 통합 검증은 `node scripts/python.mjs tests/cloud_integration.py`입니다. Docker와 OpenSSL이 필요하며, 임시 TLS PostgreSQL 및 인증을 확인하는 HTTPS Storage 모의 서버에 대해 동일 API 테스트와 권한·삭제를 확인합니다. 사용자 Supabase 프로젝트에는 접속하지 않습니다.
+
+클라우드 연결 코드를 저장한 것과 실제 Supabase 계정에 연결하여 검증한 것은 다릅니다. 연결 정보는 사용자가 Render에 직접 등록해야 합니다.
