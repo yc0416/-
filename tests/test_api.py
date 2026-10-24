@@ -23,6 +23,7 @@ class GalleryTest(unittest.TestCase):
         cls.base = f'http://127.0.0.1:{port}'
         command = [sys.executable, '-m', 'gunicorn', '--bind', f'127.0.0.1:{port}', '--workers', '1', '--threads', '4', 'server.wsgi:application'] if os.environ.get('GALLERY_TEST_WSGI') else [sys.executable, 'server/app.py']
         cls.server_env = {**os.environ, 'PORT': str(port), 'GALLERY_DATA_DIR': cls.temp.name, 'GALLERY_INVITE_CODE': 'test-invite'}
+        cls.server_env['GALLERY_ADMIN_USERNAMES'] = ''
         if os.environ.get('GALLERY_TEST_CLOUD') != '1':
             for name in ('DATABASE_URL', 'DATABASE_PASSWORD', 'SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY', 'GALLERY_REQUIRE_CLOUD'):
                 cls.server_env.pop(name, None)
@@ -53,6 +54,41 @@ class GalleryTest(unittest.TestCase):
                 return response.status, json.load(response)
         except urllib.error.HTTPError as e:
             return e.code, json.load(e)
+
+    def test_admin_deletes_others_posts_but_cannot_edit_them(self):
+        from PIL import Image
+        admin, author, other, guest = self.client(), self.client(), self.client(), self.client()
+        for client, name, nickname in ((admin,'galleryadmin','운영자'),(author,'modauthor','작성자'),(other,'modother','galleryadmin')):
+            status,result=self.req(client,'/signup',{'username':name,'nickname':nickname,'password':'password123','inviteCode':'test-invite','is_admin':True})
+            self.assertEqual(status,200)
+            self.assertFalse(result['user']['is_admin'])
+        output=io.BytesIO();Image.new('RGB',(5,5),'blue').save(output,'PNG')
+        data={'title':'관리 테스트','content':'테스트 글','galleryId':'free','images':[{'data':base64.b64encode(output.getvalue()).decode()}]}
+        pid=self.req(author,'/posts',data)[1]['id']
+        self.assertEqual(self.req(other,f'/posts/{pid}',{},'DELETE')[0],403)
+        self.assertEqual(self.req(admin,f'/posts/{pid}',{},'DELETE')[0],403)
+        self.assertFalse(self.req(other,f'/posts/{pid}')[1]['post']['can_delete'])
+        self.assertTrue(self.req(author,f'/posts/{pid}')[1]['post']['can_delete'])
+        # Admin is enabled by server configuration only, after account creation.
+        cls=type(self);command=cls.process.args
+        cls.process.terminate();cls.process.wait(timeout=5)
+        cls.server_env['GALLERY_ADMIN_USERNAMES']=' GALLERYADMIN '
+        cls.process=subprocess.Popen(command,cwd=Path(__file__).resolve().parents[1],env=cls.server_env,stdout=subprocess.DEVNULL)
+        for _ in range(100):
+            try:
+                urllib.request.urlopen(self.base+'/api/health',timeout=1).close();break
+            except OSError:time.sleep(.05)
+        self.assertTrue(self.req(admin,'/me')[1]['user']['is_admin'])
+        self.assertFalse(self.req(other,'/me')[1]['user']['is_admin'])
+        post=self.req(admin,f'/posts/{pid}')[1]['post']
+        self.assertFalse(post['mine'])
+        self.assertTrue(post['can_delete'])
+        self.assertEqual(self.req(admin,f'/posts/{pid}',{**data,'title':'변조'},'PUT')[0],403)
+        self.assertEqual(self.req(guest,f'/posts/{pid}',{},'DELETE')[0],401)
+        self.assertEqual(self.req(admin,f'/posts/{pid}',{},'DELETE')[0],200)
+        self.assertEqual(self.req(author,f'/posts/{pid}')[0],404)
+        self.assertEqual(self.req(author,post['images'][0]['url'].removeprefix('/api'))[0],404)
+        self.assertEqual(self.req(guest,'/signup',{'username':'galleryadmin','nickname':'운영자','password':'password123','inviteCode':'test-invite'})[0],403)
 
     def test_complete_friend_workflow(self):
         a,b = self.client(), self.client()

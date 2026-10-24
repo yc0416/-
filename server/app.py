@@ -32,6 +32,14 @@ if not INVITE:
         invite_file.chmod(0o600)
     INVITE = invite_file.read_text().strip()
 SECURE = os.environ.get('GALLERY_SECURE_COOKIE') == '1'
+ADMIN_USERNAMES = frozenset(name.strip().lower() for name in os.environ.get('GALLERY_ADMIN_USERNAMES', '').split(',') if name.strip())
+
+def is_admin(user):
+    return bool(user and user['username'].lower() in ADMIN_USERNAMES)
+
+def public_user(user):
+    return {**dict(user), 'is_admin': is_admin(user)} if user else None
+
 GALLERIES = [{'id': 'free', 'name': '자유 갤러리', 'description': '소소한 일상부터 주말 약속까지'}, {'id': 'game', 'name': '게임 갤러리', 'description': '오늘의 파티원을 구해 보세요'}, {'id': 'meme', 'name': '유머 갤러리', 'description': '혼자 보기 아까운 웃긴 이야기'}]
 
 def connect():
@@ -167,7 +175,7 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute('SELECT 1').fetchone()
                 return self.reply(200, {'ok': True, 'storage': 'supabase' if cloud.ENABLED else 'local'})
             if path == '/api/me' and method == 'GET':
-                return self.reply(200, {'user': dict(user) if user else None})
+                return self.reply(200, {'user': public_user(user)})
             if path in ('/api/signup', '/api/login') and method == 'POST':
                 now = int(time.time())
                 ip = self.client_address[0]
@@ -184,6 +192,10 @@ class Handler(BaseHTTPRequestHandler):
                 if not isinstance(password, str) or not 8 <= len(password) <= 128:
                     raise ValueError('비밀번호는 8~128자로 입력하세요.')
                 if path == '/api/signup':
+                    # Role grants are configured outside the app, for existing
+                    # accounts only. No one can register a reserved admin name.
+                    if username in ADMIN_USERNAMES:
+                        return self.reply(403, {'error': '관리자로 지정된 아이디는 새로 가입할 수 없습니다. 기존 계정으로 로그인하세요.'})
                     if not hmac.compare_digest(str(body.get('inviteCode', '')).encode(), INVITE.encode()):
                         return self.reply(403, {'error': '초대 코드가 올바르지 않습니다.'})
                     nickname = field('nickname', 1, 20)
@@ -202,7 +214,7 @@ class Handler(BaseHTTPRequestHandler):
                 db.execute('INSERT INTO sessions VALUES (?,?,?)', (hashlib.sha256(token.encode()).hexdigest(), uid, now+604800))
                 result = dict(db.execute('SELECT id,username,nickname FROM users WHERE id=?', (uid,)).fetchone())
                 db.commit()
-                return self.reply(200, {'user': result}, self.session_cookie(token))
+                return self.reply(200, {'user': public_user(result)}, self.session_cookie(token))
             if not user:
                 return self.reply(401, {'error': '로그인이 필요합니다.'})
             uid = user['id']
@@ -286,6 +298,7 @@ class Handler(BaseHTTPRequestHandler):
                 p = dict(row)
                 p['author'] = '익명' if p['anonymous'] else p['nickname']
                 p['mine'] = p['user_id'] == uid
+                p['can_delete'] = p['mine'] or is_admin(user)
                 p['likes'] = db.execute('SELECT count(*) FROM votes WHERE post_id=? AND value=1', (p['id'],)).fetchone()[0]
                 p['dislikes'] = db.execute('SELECT count(*) FROM votes WHERE post_id=? AND value=-1', (p['id'],)).fetchone()[0]
                 vote = db.execute('SELECT value FROM votes WHERE post_id=? AND user_id=?', (p['id'], uid)).fetchone()
@@ -333,8 +346,8 @@ class Handler(BaseHTTPRequestHandler):
                     db.commit()
                     return self.reply(200, {'id': pid})
                 if len(parts) == 3 and method == 'DELETE':
-                    if row['user_id'] != uid:
-                        return self.reply(403, {'error': '작성자만 삭제할 수 있습니다.'})
+                    if row['user_id'] != uid and not is_admin(user):
+                        return self.reply(403, {'error': '작성자 또는 관리자만 삭제할 수 있습니다.'})
                     if cloud.ENABLED:
                         for image in db.execute('SELECT id FROM images WHERE post_id=?', (pid,)):
                             db.queue_delete(image['id'])
